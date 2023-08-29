@@ -1,0 +1,352 @@
+#include <LiquidCrystal_I2C.h>
+#include <IRremote.h>
+#include <Servo.h>
+
+LiquidCrystal_I2C lcd(0x27,20,4);  // set the LCD address to 0x27 for a 16 chars and 2 line display
+IRrecv receiver(4);
+Servo myservo;  // create servo object to control a servo
+Servo myservo1; 
+
+/*
+"Power" for ON/OFF
+"+" for Lock / Double lock 
+"-" for Unlock
+"Pw" = Power
+"Dw" = Down ~ -
+"Up" = Up ~ +
+Brown servo for door 
+Blue servo for window
+1 * (300On phase 700 off phase) for lock
+2 * (300On phase 700 off phase) for unlock
+3 * (300On phase 700 off phase) for double lock
+Door and window 90 degree of spin actuator made in 1 second
+*/
+
+
+int currentState = 0; 
+int started = 0; // state of the controller
+int signal = 0; // signal from the remote controller
+float pos = 90; // position of the door actuator
+float pos1 = 90; // position of the window actuator
+int doorFlag = -1; // flag for locking/unlocking the door
+int windowFlag = -1; // flag for locking/unlocking the window
+int lightFlagL = -1; // light flag for lock 1 mode
+int lightFlagDL = -1; // light flag for lock 2 mode
+int lightFlagUn = -1; // light flag for unlock mode
+float counterL = 0; // counter for lock 1 mode 
+float counterDL = 0; // counter for lock 2 mode
+float counterUn = 0; // counter for unlock mode
+
+unsigned msMax = 0;
+
+long lightUpEndTime; // TIMERS
+long lightUpStartTime; // for lock
+
+long lightUpEndTime1;
+long lightUpStartTime1; // for double lock
+
+long lightUpEndTime2;
+long lightUpStartTime2; // for unlock
+
+long doorStart; // for door
+long doorEnd;
+
+long windowStart; // for window
+long windowEnd; 
+
+
+void lcdsetup(){ // lcd start function
+  lcd.backlight();
+  lcd.setCursor(0,0);
+  lcdPrintState();
+}
+
+void lcdPrintState(){ // prints the state of the machine => unlocked, locked, double locked
+  lcd.setCursor(0,0);
+  if(currentState == 0){
+    lcd.print("UNL");
+  }
+  else if(currentState == 1){
+    lcd.print("LCK");
+  }
+  else if(currentState == 2){
+    lcd.print("DLK");
+  }
+}
+
+void lcdPrint(char* text) // prints text given
+{
+  lcd.setCursor(0, 1);
+  lcd.print(text);
+}
+
+void remoteController(int sig){ // use the function above
+  if(sig == 162){
+  // if(sig == 48){
+    lcdPrint("Pw");
+  }
+  else if(sig == 152){
+  // else if(sig == 74){
+    lcdPrint("Dw");
+  }
+  else if(sig == 2){
+  // else if(sig == 24){
+    lcdPrint("Up");
+  }
+}
+
+
+void lightUpUn(){ // lighting the led for unlock mode
+  if(lightFlagUn == 1){
+
+    if(counterUn == 0.19){
+      lightUpStartTime2 = millis(); // start timer
+    }
+
+    if(0 <= counterUn && counterUn < 300 || 1000 <= counterUn && counterUn < 1300){
+      digitalWrite(6, HIGH);
+    }
+    else if(300 <= counterUn && counterUn < 1000 || 1300 <= counterUn && counterUn < 2000){
+      digitalWrite(6, LOW);
+    }
+    else if(counterUn >= 2000){
+      lightUpEndTime2 = millis();
+      counterUn = 0;
+      lightFlagUn = -1;
+      //Serial.println(lightUpEndTime2 - lightUpStartTime2);
+      // the difference is 2.027 s ~ 2 s (full period)
+      }
+    counterUn += 0.095;
+  }
+}
+
+
+void lightUpL(){ // lighting the led for lock mode 1
+  if(lightFlagL == 1){
+
+    if(counterL == 1){
+      lightUpStartTime = millis(); // start timer
+    }
+
+    if(0 <= counterL && counterL < 300){
+      digitalWrite(6, HIGH);
+    }
+    else if(300 <= counterL && counterL < 1000){
+      digitalWrite(6, LOW);
+    }
+    else if(counterL >= 1000){
+      counterL = 0;
+      lightFlagL = -1;
+      lightUpEndTime = millis();
+      //Serial.println(lightUpEndTime - lightUpStartTime);
+      // the difference is 1 second
+      }
+    counterL += 0.125; 
+  }
+}
+
+void lightUpDL(){ // lighting the led for lock mode 2
+  if(lightFlagDL == 1){
+
+    if(counterDL == 0.30){
+      lightUpStartTime1 = millis(); // start timer
+    }
+
+    if(0 <= counterDL && counterDL < 300 || 1000 <= counterDL && counterDL < 1300 || 2000 <= counterDL && counterDL < 2300){
+      digitalWrite(6, HIGH);
+    }
+    else if(300 <= counterDL && counterDL < 1000 || 1300 <= counterDL && counterDL < 2000 || 2300 <= counterDL && counterDL < 3000){
+      digitalWrite(6, LOW);
+    }
+    else if(counterDL >= 3000){
+      lightUpEndTime1 = millis();
+      counterDL = 0;
+      lightFlagDL = -1;
+      //Serial.println(lightUpEndTime1 - lightUpStartTime1); // the diff is 3.048 s ~ 3 s period
+      }
+    counterDL += 0.15;
+  }
+}
+
+void doorLocking(){ // locking the door
+// door lock 1 actuator spin
+
+    if(doorFlag == 1 && pos > 0){ // from 0 mode to 1 => 1,137 s ~ 1 s
+      if(pos == 90){
+      //doorStart = millis();
+      } 
+      pos -= 0.01;
+      myservo.write(pos);              // tell servo to go to position in variable 'pos' 
+      
+      if(pos < 1){
+      //doorEnd = millis();
+      //Serial.println(doorEnd - doorStart);
+      pos = 0;
+      myservo.write(0);
+      doorFlag = -1;
+      }
+    }
+  
+    if(doorFlag == 0 && pos < 90){ // from mode 1 to mode 0 
+      pos += 0.01;        
+      myservo.write(pos);    // tell servo to go to position in variable 'pos' 
+      if(pos >= 90){
+        pos = 90;
+        myservo.write(pos);
+        doorFlag = -1;
+      }
+    }
+    else if(doorFlag == 0 && pos > 90){ // from mode 2 to mode 0
+      pos -= 0.01;
+      myservo.write(pos);
+      if(pos <= 90){
+        pos = 90;
+        myservo.write(pos);
+        doorFlag = -1;
+      }
+    }
+    if(doorFlag == 2 && pos < 180){ // from 1 to 2 => 2 seconds
+      if(-1 <= pos && pos <= 1){
+        doorStart = millis();
+      }
+      pos += 0.0125;
+      myservo.write(pos);
+      if(pos >= 180){
+        doorEnd = millis();
+        //Serial.println(doorEnd - doorStart); 
+      }
+    }
+}
+
+void windowLocking(){
+  if(windowFlag == 1 && pos1 == 90){
+    windowStart = millis();
+  }
+
+  if(windowFlag == 1 && pos1 > 0){
+    pos1 -= 0.02;
+    myservo1.write(pos1);
+    if(pos1 < 1){
+      windowEnd = millis();
+      //Serial.println(windowEnd-windowStart); // the difference is 1.011 s ~ 1 s for locking/unlocking the window
+      pos1 = 0;
+      myservo1.write(pos1);
+      windowFlag = -1;
+    }
+  }
+
+  if(windowFlag == 0 && pos1 < 90){
+    pos1 += 0.02;
+    myservo1.write(pos1);
+    if(pos1 >= 90){
+      pos1 = 90;
+      myservo1.write(pos1);
+      windowFlag = -1;
+    }
+  }
+
+}
+
+ 
+void setup() {
+  Serial.begin(115200);
+  myservo.attach(5); // attaches the servo on pin 5 to the servo object
+  myservo1.attach(3);
+  receiver.enableIRIn(); // Start the receiver
+  lcd.init(); // initialize the lcd
+  pinMode(6, OUTPUT);
+}
+
+void loop() {
+  unsigned int msFromStart = 0;
+  unsigned int msFromEnd = 0;
+  // Timer for time cycle loop
+  msFromStart = millis();
+
+
+  // Checks received an IR signal
+  if (receiver.decode()) {
+  signal = receiver.decodedIRData.command;
+  receiver.resume();
+  }
+  if(signal == 162 && started == 0){ // for ON
+  // if(signal == 48 && started == 0){ //1 for power
+    started = 1;
+    lcdsetup();
+  }
+  else if(signal == 162 && started == 1){ // for OFF
+  // else if(signal == 48 && started == 1){
+    started = 0;
+    lcd.clear();
+  }
+
+  if(started == 1){
+    if(signal == 2 || signal == 152 || signal == 162){ //plus // minus // power
+    // if(signal == 24 || signal == 74 || signal == 48){
+      remoteController(signal);
+    }
+    if(currentState == 0 && signal == 2){
+    // if(currentState == 0 && signal == 24){
+      doorFlag = 1;
+      currentState = 1;
+      lcdPrintState();
+      lightFlagL = 1;
+    }
+    else if(currentState == 1 && signal == 2){
+    // else if(currentState == 1 && signal == 24){
+      windowFlag = 1;
+      doorFlag = 2;
+      currentState = 2; // state
+      lcdPrintState();
+      lightFlagDL = 1;
+    }
+    else if(currentState == 2 && signal == 152){
+    // else if(currentState == 2 && signal == 74){
+      windowFlag = 0;
+      lightFlagUn = 1;
+      doorFlag = 0;
+      currentState = 0;
+      lcdPrintState();
+    }
+    else if(currentState == 1 && signal == 152){
+    // else if(currentState == 1 && signal == 74){
+      windowFlag = 0;
+      lightFlagUn = 1;
+      doorFlag = 0;
+      currentState = 0;
+      lcdPrintState();
+    }
+    lightUpUn();
+    lightUpL();
+    lightUpDL();
+    doorLocking();
+    windowLocking();
+  
+  }
+
+  //Serial.println(started);
+  //Serial.println(signal);
+  //Serial.println(currentState);
+  signal = 0;
+
+  msFromEnd = millis();
+  msMax = max(msMax, msFromEnd - msFromStart);
+  /*
+  if(msFromEnd - msFromStart > 1){
+    Serial.println(msFromEnd - msFromStart);
+  }
+  */
+  //Serial.println(lightFlagDL);
+  //Serial.println(counterDL);
+  //Serial.println(msFromEnd - msFromStart);
+  //delay(100);
+  //Serial.println(pos);
+}
+
+
+
+// plus for lock / double lock
+// minus for unlock
+// LCD takes a ton of time displaying characters | minimum 20 sec just for displaying 3 characters
+// maximul loop cycle time is 15ms. BUT on average is 2. 12-13ms for printing on LCD(changing state's status). 14-15 ms for starting the LCD.
+
